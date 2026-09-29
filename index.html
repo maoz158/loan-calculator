@@ -810,27 +810,22 @@ function calculateLoan() {
 
     updateDoughnutChart(P, extraResult.totalInterest);
 
-    // ปรับปรุงการสร้าง Label และ Padding ข้อมูลกราฟเส้นให้หยุดตรงเดือนที่หมดหนี้จริง ไม่ดึงค่ายาวไปจนชน 60 เดือน
     let maxLen = Math.max(stdResult.balances.length, extraResult.balances.length);
     let labels = [];
     for (let i = 0; i < maxLen; i++) labels.push(i);
 
-    let padArray = (arr, targetLen, fillVal, stopAtActual) => {
+    let padArray = (arr, targetLen, fillVal) => {
         let res = [...arr];
-        if (stopAtActual) {
-            // กรณีเส้นจ่ายเพิ่ม ให้หยุดความยาวตามเดือนจริงที่หมดหนี้ (ไม่ต้องเติมค่าสะสมจนล้น)
-            return res;
-        }
         while(res.length < targetLen) res.push(fillVal);
         return res;
     };
 
     globalChartData = {
         labels: labels,
-        stdBalances: padArray(stdResult.balances, maxLen, 0, false),
-        extraBalances: extraResult.balances, // หยุดตามขนาดยอดจริง
-        stdInterests: padArray(stdResult.accumulatedInterests, maxLen, stdResult.totalInterest, false),
-        extraInterests: extraResult.accumulatedInterests // หยุดตามขนาดยอดจริง
+        stdBalances: padArray(stdResult.balances, maxLen, 0),
+        extraBalances: extraResult.balances,
+        stdInterests: padArray(stdResult.accumulatedInterests, maxLen, stdResult.totalInterest),
+        extraInterests: extraResult.accumulatedInterests
     };
 
     renderUnifiedChart();
@@ -896,8 +891,8 @@ function renderUnifiedChart() {
             {
                 label: 'เงินต้นคงเหลือ (จ่ายเพิ่ม)',
                 data: globalChartData.extraBalances,
-                borderColor: '#34c759',
-                backgroundColor: 'rgba(52, 199, 89, 0.08)',
+                borderColor: '#0066cc',
+                backgroundColor: 'rgba(0, 102, 204, 0.05)',
                 fill: true,
                 tension: 0.1,
                 yAxisID: 'y'
@@ -905,8 +900,8 @@ function renderUnifiedChart() {
             {
                 label: 'ดอกเบี้ยสะสม (จ่ายเพิ่ม)',
                 data: globalChartData.extraInterests,
-                borderColor: '#0066cc',
-                backgroundColor: 'rgba(0, 102, 204, 0.02)',
+                borderColor: '#34c759',
+                backgroundColor: 'rgba(52, 199, 89, 0.02)',
                 fill: false,
                 tension: 0.1,
                 yAxisID: 'y1'
@@ -914,22 +909,23 @@ function renderUnifiedChart() {
         );
     }
 
-    // สร้าง Label ความยาวสูงสุดตามกราฟปกติ เพื่อให้แกน X รองรับครบ
-    let maxLabelsLen = globalChartData.stdBalances.length;
-    let chartLabels = [];
-    for (let i = 0; i < maxLabelsLen; i++) chartLabels.push(i);
-
     trendChartInstance = new Chart(ctx, {
         type: 'line',
-        data: { labels: chartLabels, datasets: datasets },
+        data: {
+            labels: globalChartData.labels,
+            datasets: datasets
+        },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', labels: { boxWidth: 12, font: { family: '-apple-system', size: 12 } } }
+            },
             scales: {
                 x: {
-                    title: { display: true, text: 'งวดที่ (เดือน)' },
-                    grid: { color: '#f0f0f5' }
+                    grid: { display: false },
+                    title: { display: true, text: 'งวดที่ (เดือน)' }
                 },
                 y: {
                     type: 'linear',
@@ -945,51 +941,86 @@ function renderUnifiedChart() {
                     title: { display: true, text: 'ดอกเบี้ยสะสม (บาท)' },
                     grid: { drawOnChartArea: false }
                 }
-            },
-            plugins: {
-                legend: { position: 'top', labels: { boxWidth: 12, font: { family: '-apple-system', size: 12 } } }
             }
         }
     });
 }
 
-function applyStrategy(mode) {
-    currentStrategyMode = mode;
-    let extraInput = document.getElementById('extraPayment');
-    
-    if (mode === 'sweetspot') {
-        extraInput.value = recommendedSweetSpot.toLocaleString('en-US');
-    } else if (mode === 'powerup') {
-        extraInput.value = recommendedPowerUp.toLocaleString('en-US');
-    } else if (mode === 'herotrick') {
-        extraInput.value = recommendedPowerUp.toLocaleString('en-US');
+function applyStrategy(type) {
+    let P = parseCurrency(document.getElementById('loanAmount').value);
+    let annualInterest = parseFloat(document.getElementById('interestRate').value);
+    let n = parseInt(document.getElementById('loanTermMonths').value);
+    let r = annualInterest / 100 / 12;
+
+    let stdResult = runSimulation(P, r, n, 0, 'standard');
+    let targetExtra = 0;
+
+    if (type === 'sweetspot') {
+        targetExtra = recommendedSweetSpot;
+        currentStrategyMode = 'sweetspot';
+    } else if (type === 'powerup') {
+        targetExtra = recommendedPowerUp;
+        currentStrategyMode = 'powerup';
+    } else if (type === 'herotrick') {
+        targetExtra = recommendedPowerUp; 
+        currentStrategyMode = 'herotrick';
     }
-    
+
+    document.getElementById('extraPayment').value = targetExtra.toLocaleString('en-US');
     updateActiveStrategyUI();
     calculateLoan();
 }
 
 function updateActiveStrategyUI() {
-    document.getElementById('btnStratSweet').classList.remove('active');
-    document.getElementById('btnStratPower').classList.remove('active');
-    document.getElementById('btnStratHero').classList.remove('active');
+    ['btnStratSweet', 'btnStratPower', 'btnStratHero'].forEach(id => {
+        document.getElementById(id).classList.remove('active');
+    });
 
-    if (currentStrategyMode === 'sweetspot') {
-        document.getElementById('btnStratSweet').classList.add('active');
-    } else if (currentStrategyMode === 'powerup') {
-        document.getElementById('btnStratPower').classList.add('active');
-    } else if (currentStrategyMode === 'herotrick') {
-        document.getElementById('btnStratHero').classList.add('active');
-    }
+    if (currentStrategyMode === 'sweetspot') document.getElementById('btnStratSweet').classList.add('active');
+    if (currentStrategyMode === 'powerup') document.getElementById('btnStratPower').classList.add('active');
+    if (currentStrategyMode === 'herotrick') document.getElementById('btnStratHero').classList.add('active');
 }
 
 function exportAsImage() {
-    const container = document.getElementById('exportSnapshotContainer');
-    html2canvas(container, { scale: 2 }).then(canvas => {
-        let link = document.createElement('a');
-        link.download = 'loan-summary-snapshot.png';
-        link.href = canvas.toDataURL('image/png');
-        link.click();
+    let container = document.getElementById('exportSnapshotContainer');
+    container.style.left = '0';
+
+    html2canvas(container, { scale: 2, useCORS: true, backgroundColor: '#ffffff' }).then(canvas => {
+        container.style.left = '-9999px';
+        const dataURL = canvas.toDataURL('image/png');
+
+        const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+        const isIOS = /iPad|iPhone|iPod/.test(userAgent) && !window.MSStream;
+
+        if (isIOS) {
+            let newWindow = window.open();
+            if (newWindow) {
+                newWindow.document.write(`
+                    <html>
+                        <head><title>Loan Snapshot</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+                        <body style="margin:0; background:#1d1d1f; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh;">
+                            <p style="color:#ffffff; font-family:-apple-system; font-size:14px; margin-bottom:12px; text-align:center; padding:0 20px;">
+                                กดค้างที่รูปภาพด้านล่างนี้ แล้วเลือก <b>"Add to Photos"</b> เพื่อบันทึกรูป
+                            </p>
+                            <img src="${dataURL}" style="max-width:95%; height:auto; border-radius:12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);" />
+                        </body>
+                    </html>
+                `);
+            } else {
+                alert("กรุณาอนุญาต Pop-up บนเบราว์เซอร์ของคุณเพื่อดูรูปภาพ");
+            }
+        } else {
+            const link = document.createElement('a');
+            link.download = 'loan-strategy-snapshot.png';
+            link.href = dataURL;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    }).catch(err => {
+        console.error("Snapshot error:", err);
+        container.style.left = '-9999px';
+        alert("ไม่สามารถสร้างรูปภาพรายงานได้ กรุณาลองใหม่อีกครั้ง");
     });
 }
 </script>
